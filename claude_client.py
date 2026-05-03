@@ -1,7 +1,32 @@
 import json
+import logging
 import os
 import anthropic
 from dotenv import load_dotenv
+
+logger = logging.getLogger(__name__)
+
+
+def _extract_json(raw: str) -> dict:
+    """
+    Надёжно извлекает JSON из ответа Claude.
+    Обрабатывает: чистый JSON, ```json...```, текст до/после JSON.
+    """
+    text = raw.strip()
+    # Убираем markdown-обёртку
+    if text.startswith("```"):
+        text = text.split("\n", 1)[-1]
+        text = text.rsplit("```", 1)[0].strip()
+    # Вырезаем между первой { и последней }
+    start = text.find("{")
+    end = text.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        text = text[start:end + 1]
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        logger.error("Не удалось распарсить JSON. Ответ:\n%s", raw[:500])
+        return {"raw": raw, "error": True}
 
 load_dotenv(override=True)
 
@@ -66,15 +91,7 @@ class ClaudeEditor:
                 }
             ],
         )
-        raw = response.content[0].text.strip()
-        # Claude иногда оборачивает JSON в ```json...``` несмотря на инструкцию
-        if raw.startswith("```"):
-            raw = raw.split("\n", 1)[-1]
-            raw = raw.rsplit("```", 1)[0].strip()
-        try:
-            return json.loads(raw)
-        except json.JSONDecodeError:
-            return {"raw": raw, "error": True}
+        return _extract_json(response.content[0].text)
 
     async def merge_style_analyses(self, analyses: list[dict]) -> dict:
         """Объединяет несколько частичных анализов в один итоговый профиль. Opus."""
