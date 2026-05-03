@@ -174,7 +174,7 @@ async def cb_ideas(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.message(IdeasFlow.waiting_for_context)
+@router.message(IdeasFlow.waiting_for_context, ~Command())
 async def handle_ideas_context(message: Message, state: FSMContext):
     if not await _check_limit(message, LIMIT_CONTEXT):
         return
@@ -231,7 +231,7 @@ async def cb_plan(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.message(PlanFlow.waiting_for_topic)
+@router.message(PlanFlow.waiting_for_topic, ~Command())
 async def handle_plan_topic(message: Message, state: FSMContext):
     if not await _check_limit(message, LIMIT_TOPIC):
         return
@@ -282,7 +282,7 @@ async def cb_edit(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.message(EditFlow.waiting_for_draft)
+@router.message(EditFlow.waiting_for_draft, ~Command())
 async def handle_edit_draft(message: Message, state: FSMContext):
     if not await _check_limit(message, LIMIT_DRAFT):
         return
@@ -294,7 +294,7 @@ async def handle_edit_draft(message: Message, state: FSMContext):
     )
 
 
-@router.message(EditFlow.waiting_for_instructions)
+@router.message(EditFlow.waiting_for_instructions, ~Command())
 async def handle_edit_instructions(message: Message, state: FSMContext):
     if not await _check_limit(message, LIMIT_INSTRUCTIONS):
         return
@@ -370,7 +370,7 @@ async def cb_digest(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.message(DigestFlow.waiting_for_posts)
+@router.message(DigestFlow.waiting_for_posts, ~Command())
 async def handle_digest_posts(message: Message, state: FSMContext):
     if not await _check_limit(message, LIMIT_POSTS):
         return
@@ -432,7 +432,7 @@ async def cb_style(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.message(StyleFlow.waiting_for_posts)
+@router.message(StyleFlow.waiting_for_posts, ~Command())
 async def handle_style_posts(message: Message, state: FSMContext):
     if not await _check_limit(message, LIMIT_POSTS):
         return
