@@ -6,6 +6,7 @@ import json
 import logging
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +37,7 @@ def save_report(channel: str, posts: list[str], total: int, analysis: dict) -> P
     return path
 
 
-def load_latest_report(channel: str) -> dict | None:
+def load_latest_report(channel: str) -> Optional[dict]:
     """
     Загружает последний отчёт по каналу.
     Возвращает None если отчёта нет или он старше CACHE_TTL_DAYS.
