@@ -61,6 +61,10 @@ async def _safe_delete(msg: Message) -> None:
         pass
 
 
+def _is_command(message: Message) -> bool:
+    return bool(message.text and message.text.startswith("/"))
+
+
 async def _check_limit(message: Message, limit: int) -> bool:
     """Возвращает False и отвечает пользователю если текст превышает лимит."""
     if len(message.text) > limit:
@@ -174,8 +178,10 @@ async def cb_ideas(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.message(IdeasFlow.waiting_for_context, ~Command())
+@router.message(IdeasFlow.waiting_for_context)
 async def handle_ideas_context(message: Message, state: FSMContext):
+    if _is_command(message):
+        return
     if not await _check_limit(message, LIMIT_CONTEXT):
         return
     await state.update_data(ideas_context=message.text)
@@ -231,8 +237,10 @@ async def cb_plan(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.message(PlanFlow.waiting_for_topic, ~Command())
+@router.message(PlanFlow.waiting_for_topic)
 async def handle_plan_topic(message: Message, state: FSMContext):
+    if _is_command(message):
+        return
     if not await _check_limit(message, LIMIT_TOPIC):
         return
     await state.update_data(plan_topic=message.text)
@@ -282,8 +290,10 @@ async def cb_edit(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.message(EditFlow.waiting_for_draft, ~Command())
+@router.message(EditFlow.waiting_for_draft)
 async def handle_edit_draft(message: Message, state: FSMContext):
+    if _is_command(message):
+        return
     if not await _check_limit(message, LIMIT_DRAFT):
         return
     await state.update_data(edit_draft=message.text)
@@ -294,8 +304,10 @@ async def handle_edit_draft(message: Message, state: FSMContext):
     )
 
 
-@router.message(EditFlow.waiting_for_instructions, ~Command())
+@router.message(EditFlow.waiting_for_instructions)
 async def handle_edit_instructions(message: Message, state: FSMContext):
+    if _is_command(message):
+        return
     if not await _check_limit(message, LIMIT_INSTRUCTIONS):
         return
     data = await state.get_data()
@@ -370,8 +382,10 @@ async def cb_digest(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.message(DigestFlow.waiting_for_posts, ~Command())
+@router.message(DigestFlow.waiting_for_posts)
 async def handle_digest_posts(message: Message, state: FSMContext):
+    if _is_command(message):
+        return
     if not await _check_limit(message, LIMIT_POSTS):
         return
     posts = [p.strip() for p in message.text.split("---") if p.strip()]
@@ -432,8 +446,10 @@ async def cb_style(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.message(StyleFlow.waiting_for_posts, ~Command())
+@router.message(StyleFlow.waiting_for_posts)
 async def handle_style_posts(message: Message, state: FSMContext):
+    if _is_command(message):
+        return
     if not await _check_limit(message, LIMIT_POSTS):
         return
     posts = [p.strip() for p in message.text.split("---") if p.strip()]
