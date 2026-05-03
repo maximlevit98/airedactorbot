@@ -1,6 +1,6 @@
 """
 Чтение постов из публичного Telegram-канала через веб-превью t.me/s/.
-Не требует API_ID, API_HASH или авторизации — работает для любого публичного канала.
+Не требует API_ID, API_HASH или авторизации.
 """
 import logging
 
@@ -9,58 +9,65 @@ from bs4 import BeautifulSoup
 
 logger = logging.getLogger(__name__)
 
-MAX_TOTAL_CHARS = 7000  # запас до лимита LIMIT_POSTS в handlers.py
 MIN_POST_LEN = 80       # пропускаем слишком короткие сообщения
+MAX_ANALYSIS_CHARS = 25000  # лимит для передачи в Claude
 
 
-async def fetch_posts(channel: str, pages: int = 3) -> list[str]:
+async def fetch_all_posts(channel: str, max_pages: int = 30) -> tuple[list[str], int]:
     """
-    Выгружает последние посты из публичного канала.
+    Выгружает все посты из публичного канала постранично.
 
-    channel — юзернейм с @ или без, например '@design' или 'design'.
-    pages   — сколько страниц загрузить (каждая ~20 постов).
-
-    Возвращает список текстов, суммарно не превышающих MAX_TOTAL_CHARS.
+    Возвращает (все_посты, всего_найдено).
+    Пагинация через ?before=ID — идём от новых к старым.
     """
     username = channel.lstrip("@")
     url = f"https://t.me/s/{username}"
-
-    headers = {"User-Agent": "Mozilla/5.0 (compatible; bot)"}
-    posts: list[str] = []
-    total_chars = 0
+    headers = {"User-Agent": "Mozilla/5.0 (compatible; tg-editor-bot)"}
+    all_posts: list[str] = []
 
     async with aiohttp.ClientSession(headers=headers) as session:
-        # Первая страница
-        async with session.get(url) as resp:
-            if resp.status != 200:
-                raise RuntimeError(
-                    f"Канал @{username} недоступен (HTTP {resp.status}).\n"
-                    "Проверь: канал существует и является публичным."
-                )
-            html = await resp.text()
+        for page_num in range(max_pages):
+            async with session.get(url) as resp:
+                if resp.status != 200:
+                    if page_num == 0:
+                        raise RuntimeError(
+                            f"Канал @{username} недоступен (HTTP {resp.status}).\n"
+                            "Проверь: канал существует и является публичным."
+                        )
+                    break
+                html = await resp.text()
 
-        for page in range(pages):
             soup = BeautifulSoup(html, "html.parser")
 
-            # Собираем тексты постов с текущей страницы
+            # Собираем тексты постов
+            page_posts: list[str] = []
             for tag in soup.find_all("div", class_="tgme_widget_message_text"):
                 text = tag.get_text(separator="\n").strip()
-                if len(text) < MIN_POST_LEN:
-                    continue
-                if total_chars + len(text) > MAX_TOTAL_CHARS:
-                    return posts
-                posts.append(text)
-                total_chars += len(text)
+                if len(text) >= MIN_POST_LEN:
+                    page_posts.append(text)
 
-            # Следующая страница — ищем ссылку «Load more»
-            if page < pages - 1:
-                load_more = soup.find("a", class_="tme_messages_more")
-                if not load_more:
-                    break
-                next_url = "https://t.me" + load_more["href"]
-                async with session.get(next_url) as resp:
-                    if resp.status != 200:
-                        break
-                    html = await resp.text()
+            if not page_posts:
+                break
 
-    return posts
+            all_posts.extend(page_posts)
+
+            # Ищем ссылку на следующую (более старую) страницу
+            load_more = soup.find("a", class_="tme_messages_more")
+            if not load_more or not load_more.get("href"):
+                break  # достигли конца канала
+            url = "https://t.me" + load_more["href"]
+
+    total = len(all_posts)
+    return all_posts, total
+
+
+def select_for_analysis(posts: list[str], max_chars: int = MAX_ANALYSIS_CHARS) -> list[str]:
+    """Берёт первые (самые новые) посты суммарно не более max_chars символов."""
+    selected: list[str] = []
+    chars = 0
+    for post in posts:
+        if chars + len(post) > max_chars:
+            break
+        selected.append(post)
+        chars += len(post)
+    return selected

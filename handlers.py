@@ -6,11 +6,13 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import Message, CallbackQuery
 
-from channel_reader import fetch_posts
+from channel_reader import fetch_all_posts, select_for_analysis
+from report_store import save_report, load_latest_report
 from claude_client import ClaudeEditor
 from keyboards import (
     main_menu, cancel_keyboard, ideas_keyboard,
     plan_keyboard, edit_result_keyboard, digest_keyboard, style_keyboard,
+    fetch_cache_keyboard,
 )
 
 logger = logging.getLogger(__name__)
@@ -470,8 +472,48 @@ async def handle_style_posts(message: Message, state: FSMContext):
 
 # ── FETCH CHANNEL ─────────────────────────────────────────────────────────────
 
+async def _do_fetch_and_analyze(message: Message, state: FSMContext, channel: str) -> None:
+    """Выгружает посты, анализирует, сохраняет отчёт."""
+    thinking = await message.answer(f"⏳ Читаю все посты из {channel}…")
+    try:
+        all_posts, total = await fetch_all_posts(channel)
+    except Exception as e:
+        logger.error("Fetch error: %s", e)
+        await thinking.edit_text(str(e) if isinstance(e, RuntimeError) else f"Не удалось прочитать канал.\n{e}")
+        return
+
+    if total < 3:
+        await thinking.edit_text(f"Нашёл только {total} постов — недостаточно для анализа.")
+        return
+
+    posts_for_analysis = select_for_analysis(all_posts)
+    await thinking.edit_text(
+        f"⏳ Найдено <b>{total}</b> постов, в анализ идёт <b>{len(posts_for_analysis)}</b>…\n"
+        "(это займёт полминуты)",
+        parse_mode="HTML",
+    )
+    try:
+        profile = await claude.analyze_style(posts_for_analysis)
+    except Exception as e:
+        logger.error("Claude error: %s", e)
+        await thinking.edit_text("Ошибка при анализе. Попробуй позже.")
+        return
+
+    report_path = save_report(channel, posts_for_analysis, total, profile)
+    await _safe_delete(thinking)
+
+    summary = (
+        f"📊 <b>Отчёт по {channel}</b>\n"
+        f"Всего постов в канале: <b>{total}</b>\n"
+        f"Проанализировано: <b>{len(posts_for_analysis)}</b>\n"
+        f"Сохранено: <code>{report_path.name}</code>\n\n"
+    )
+    await message.answer(summary, parse_mode="HTML")
+    await _send(message, _format_style(profile), parse_mode="HTML", reply_markup=style_keyboard())
+
+
 @router.message(Command("fetch_channel"))
-async def cmd_fetch_channel(message: Message):
+async def cmd_fetch_channel(message: Message, state: FSMContext):
     args = message.text.split(maxsplit=1)
     channel = args[1].strip() if len(args) > 1 else os.getenv("CHANNEL_USERNAME", "")
 
@@ -483,34 +525,55 @@ async def cmd_fetch_channel(message: Message):
         )
         return
 
-    thinking = await message.answer(f"⏳ Читаю посты из {channel}...")
-    try:
-        posts = await fetch_posts(channel)
-    except Exception as e:
-        logger.error("Fetch error: %s", e)
-        await thinking.edit_text(str(e) if isinstance(e, RuntimeError) else f"Не удалось прочитать канал.\n{e}")
-        return
-
-    if len(posts) < 3:
-        await thinking.edit_text(
-            f"Нашёл только {len(posts)} постов — недостаточно для анализа.\n"
-            "Нужно минимум 3."
+    # Проверяем кэш
+    cached = load_latest_report(channel)
+    if cached:
+        from datetime import datetime
+        dt = datetime.fromisoformat(cached["fetched_at"])
+        date_str = dt.strftime("%d.%m.%Y %H:%M")
+        await state.update_data(fetch_channel=channel, fetch_cached=cached)
+        await message.answer(
+            f"📁 Найден отчёт от <b>{date_str}</b>\n"
+            f"Всего постов: <b>{cached['total_fetched']}</b> | "
+            f"Проанализировано: <b>{cached['posts_for_analysis']}</b>\n\n"
+            "Использовать кэш или выгрузить заново?",
+            parse_mode="HTML",
+            reply_markup=fetch_cache_keyboard(),
         )
         return
 
-    await thinking.edit_text(
-        f"⏳ Выгружено {len(posts)} постов, анализирую стиль…\n"
-        "(это займёт полминуты)"
-    )
-    try:
-        profile = await claude.analyze_style(posts)
-    except Exception as e:
-        logger.error("Claude error: %s", e)
-        await thinking.edit_text("Ошибка при анализе. Попробуй позже.")
-        return
+    await _do_fetch_and_analyze(message, state, channel)
 
-    await _safe_delete(thinking)
-    await _send(message, _format_style(profile), parse_mode="HTML", reply_markup=style_keyboard())
+
+@router.callback_query(F.data == "fetch:use_cache")
+async def cb_fetch_use_cache(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    cached = data.get("fetch_cached")
+    if not cached:
+        await callback.answer("Кэш не найден.", show_alert=True)
+        return
+    await callback.answer()
+    await callback.message.edit_text("Загружаю из кэша…")
+    profile = cached.get("analysis", {})
+    await _safe_delete(callback.message)
+    from datetime import datetime
+    dt = datetime.fromisoformat(cached["fetched_at"])
+    summary = (
+        f"📊 <b>Из кэша ({dt.strftime('%d.%m.%Y')})</b>\n"
+        f"Постов в канале: <b>{cached['total_fetched']}</b> | "
+        f"Проанализировано: <b>{cached['posts_for_analysis']}</b>\n\n"
+    )
+    await callback.message.answer(summary, parse_mode="HTML")
+    await _send(callback.message, _format_style(profile), parse_mode="HTML", reply_markup=style_keyboard())
+
+
+@router.callback_query(F.data == "fetch:refresh")
+async def cb_fetch_refresh(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    channel = data.get("fetch_channel", os.getenv("CHANNEL_USERNAME", ""))
+    await callback.answer()
+    await callback.message.edit_text("Запускаю обновление…")
+    await _do_fetch_and_analyze(callback.message, state, channel)
 
 
 # ── FREE CHAT ─────────────────────────────────────────────────────────────────

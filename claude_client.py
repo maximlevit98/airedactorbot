@@ -3,7 +3,7 @@ import os
 import anthropic
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(override=True)
 
 EDITOR_SYSTEM_PROMPT = """Ты — главный редактор Telegram-канала про дизайн и личную жизнь автора.
 

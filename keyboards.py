@@ -74,6 +74,18 @@ def digest_keyboard() -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
+def fetch_cache_keyboard() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text="✅ Использовать кэш", callback_data="fetch:use_cache"),
+        InlineKeyboardButton(text="🔄 Обновить", callback_data="fetch:refresh"),
+    )
+    builder.row(
+        InlineKeyboardButton(text="◀️ В меню", callback_data="action:menu"),
+    )
+    return builder.as_markup()
+
+
 def style_keyboard() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.row(
