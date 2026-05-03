@@ -15,6 +15,40 @@ logger = logging.getLogger(__name__)
 router = Router()
 claude = ClaudeEditor()
 
+TG_LIMIT = 4096
+
+
+async def _send(message: Message, text: str, **kwargs) -> None:
+    """Отправляет текст, разбивая на части если > 4096 символов."""
+    if len(text) <= TG_LIMIT:
+        await message.answer(text, **kwargs)
+        return
+    chunks: list[str] = []
+    current = ""
+    for para in text.split("\n\n"):
+        candidate = (current + "\n\n" + para).strip() if current else para
+        if len(candidate) <= TG_LIMIT:
+            current = candidate
+        else:
+            if current:
+                chunks.append(current)
+            # Параграф сам по себе больше лимита — режем по символам
+            while len(para) > TG_LIMIT:
+                chunks.append(para[:TG_LIMIT])
+                para = para[TG_LIMIT:]
+            current = para
+    if current:
+        chunks.append(current)
+    for i, chunk in enumerate(chunks):
+        await message.answer(chunk, **kwargs if i == len(chunks) - 1 else {})
+
+
+async def _safe_delete(msg: Message) -> None:
+    try:
+        await msg.delete()
+    except Exception:
+        pass
+
 
 class IdeasFlow(StatesGroup):
     waiting_for_context = State()
@@ -129,8 +163,8 @@ async def handle_ideas_context(message: Message, state: FSMContext):
         await thinking.edit_text("Ошибка при обращении к Claude. Попробуй позже.")
         return
     await state.set_state(None)
-    await thinking.delete()
-    await message.answer(result, reply_markup=ideas_keyboard())
+    await _safe_delete(thinking)
+    await _send(message, result, reply_markup=ideas_keyboard())
 
 
 @router.callback_query(F.data == "action:retry_ideas")
@@ -148,8 +182,8 @@ async def cb_retry_ideas(callback: CallbackQuery, state: FSMContext):
         logger.error("Claude error: %s", e)
         await thinking.edit_text("Ошибка. Попробуй позже.")
         return
-    await thinking.delete()
-    await callback.message.answer(result, reply_markup=ideas_keyboard())
+    await _safe_delete(thinking)
+    await _send(callback.message, result, reply_markup=ideas_keyboard())
 
 
 # ── PLAN ──────────────────────────────────────────────────────────────────────
@@ -184,8 +218,8 @@ async def handle_plan_topic(message: Message, state: FSMContext):
         await thinking.edit_text("Ошибка при обращении к Claude. Попробуй позже.")
         return
     await state.set_state(None)
-    await thinking.delete()
-    await message.answer(result, reply_markup=plan_keyboard())
+    await _safe_delete(thinking)
+    await _send(message, result, reply_markup=plan_keyboard())
 
 
 @router.callback_query(F.data == "action:retry_plan")
@@ -203,8 +237,8 @@ async def cb_retry_plan(callback: CallbackQuery, state: FSMContext):
         logger.error("Claude error: %s", e)
         await thinking.edit_text("Ошибка. Попробуй позже.")
         return
-    await thinking.delete()
-    await callback.message.answer(result, reply_markup=plan_keyboard())
+    await _safe_delete(thinking)
+    await _send(callback.message, result, reply_markup=plan_keyboard())
 
 
 # ── EDIT ──────────────────────────────────────────────────────────────────────
@@ -246,8 +280,8 @@ async def handle_edit_instructions(message: Message, state: FSMContext):
         return
     await state.update_data(edit_result=result)
     await state.set_state(None)
-    await thinking.delete()
-    await message.answer(result, reply_markup=edit_result_keyboard())
+    await _safe_delete(thinking)
+    await _send(message, result, reply_markup=edit_result_keyboard())
 
 
 @router.callback_query(F.data == "action:retry_edit")
@@ -267,8 +301,8 @@ async def cb_retry_edit(callback: CallbackQuery, state: FSMContext):
         await thinking.edit_text("Ошибка. Попробуй позже.")
         return
     await state.update_data(edit_result=result)
-    await thinking.delete()
-    await callback.message.answer(result, reply_markup=edit_result_keyboard())
+    await _safe_delete(thinking)
+    await _send(callback.message, result, reply_markup=edit_result_keyboard())
 
 
 @router.callback_query(F.data == "action:edit_again")
@@ -317,8 +351,8 @@ async def handle_digest_posts(message: Message, state: FSMContext):
         await thinking.edit_text("Ошибка при обращении к Claude. Попробуй позже.")
         return
     await state.set_state(None)
-    await thinking.delete()
-    await message.answer(result, reply_markup=digest_keyboard())
+    await _safe_delete(thinking)
+    await _send(message, result, reply_markup=digest_keyboard())
 
 
 # ── STYLE ─────────────────────────────────────────────────────────────────────
@@ -356,8 +390,8 @@ async def handle_style_posts(message: Message, state: FSMContext):
         await thinking.edit_text("Ошибка при обращении к Claude. Попробуй позже.")
         return
     await state.set_state(None)
-    await thinking.delete()
-    await message.answer(_format_style(profile), parse_mode="HTML", reply_markup=style_keyboard())
+    await _safe_delete(thinking)
+    await _send(message, _format_style(profile), parse_mode="HTML", reply_markup=style_keyboard())
 
 
 # ── FREE CHAT ─────────────────────────────────────────────────────────────────
@@ -373,5 +407,5 @@ async def free_chat(message: Message):
         logger.error("Claude error: %s", e)
         await thinking.edit_text("Ошибка. Попробуй позже.")
         return
-    await thinking.delete()
-    await message.answer(result, reply_markup=main_menu())
+    await _safe_delete(thinking)
+    await _send(message, result, reply_markup=main_menu())

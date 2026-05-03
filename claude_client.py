@@ -14,8 +14,8 @@ EDITOR_SYSTEM_PROMPT = """Ты — главный редактор Telegram-ка
 - Эмодзи умеренно, только когда усиливают смысл
 - Вопросы к читателю в конце поощряются
 
-Форматирование Telegram:
-- **жирный** для акцентов, _курсив_ для интонации
+Форматирование Telegram (HTML):
+- <b>жирный</b> для акцентов, <i>курсив</i> для интонации
 - Списки с дефисом или эмодзи, не с точками
 - Абзацы через пустую строку
 - Длина поста 300–900 символов (если нет других указаний)
@@ -44,7 +44,7 @@ class ClaudeEditor:
         posts_text = "\n\n---\n\n".join(posts)
         response = await self._client.messages.create(
             model="claude-opus-4-6",
-            max_tokens=4096,
+            max_tokens=2048,
             system=self._system(),
             messages=[
                 {
@@ -67,6 +67,10 @@ class ClaudeEditor:
             ],
         )
         raw = response.content[0].text.strip()
+        # Claude иногда оборачивает JSON в ```json...``` несмотря на инструкцию
+        if raw.startswith("```"):
+            raw = raw.split("\n", 1)[-1]
+            raw = raw.rsplit("```", 1)[0].strip()
         try:
             return json.loads(raw)
         except json.JSONDecodeError:
@@ -76,17 +80,15 @@ class ClaudeEditor:
         """Генерация идей для постов. Sonnet — основная рабочая задача."""
         response = await self._client.messages.create(
             model="claude-sonnet-4-6",
-            max_tokens=2048,
+            max_tokens=1024,
             system=self._system(),
             messages=[
                 {
                     "role": "user",
                     "content": (
-                        f"Сгенерируй {count} идей для постов в Telegram-канале про дизайн и личную жизнь.\n\n"
-                        f"Контекст от автора: {context}\n\n"
-                        f"Для каждой идеи:\n"
-                        f"— Цепляющий заголовок/тему (1 строка)\n"
-                        f"— Угол подачи: что именно интересного (1–2 предложения)\n\n"
+                        f"Сгенерируй {count} идей для постов.\n\n"
+                        f"Контекст: {context}\n\n"
+                        f"Для каждой идеи: заголовок (1 строка) + угол подачи (1–2 предложения).\n"
                         f"Нумеруй от 1 до {count}."
                     ),
                 }
@@ -98,20 +100,19 @@ class ClaudeEditor:
         """Создать детальный план поста."""
         response = await self._client.messages.create(
             model="claude-sonnet-4-6",
-            max_tokens=2048,
+            max_tokens=1200,
             system=self._system(),
             messages=[
                 {
                     "role": "user",
                     "content": (
-                        f"Составь детальный план поста для Telegram-канала на тему:\n{topic}\n\n"
-                        "Структура плана:\n"
-                        "1. Хук — первые 1–2 предложения, чтобы захотелось читать\n"
-                        "2. Основная мысль — о чём пост\n"
+                        f"Составь план поста на тему:\n{topic}\n\n"
+                        "1. Хук — 1–2 предложения\n"
+                        "2. Основная мысль\n"
                         "3. Структура — 3–5 блоков с тезисами\n"
-                        "4. Детали и примеры для каждого блока\n"
+                        "4. Детали и примеры\n"
                         "5. Финал / призыв к действию\n\n"
-                        "Пиши конкретно — это рабочий план, не пересказ темы."
+                        "Конкретно, без воды."
                     ),
                 }
             ],
@@ -122,7 +123,7 @@ class ClaudeEditor:
         """Редактировать черновик по инструкции автора."""
         response = await self._client.messages.create(
             model="claude-sonnet-4-6",
-            max_tokens=2048,
+            max_tokens=1024,
             system=self._system(),
             messages=[
                 {
@@ -142,17 +143,15 @@ class ClaudeEditor:
         posts_text = "\n\n---\n\n".join(posts)
         response = await self._client.messages.create(
             model="claude-haiku-4-5-20251001",
-            max_tokens=2048,
+            max_tokens=1200,
             system=self._system(),
             messages=[
                 {
                     "role": "user",
                     "content": (
-                        "Сделай краткий дайджест постов из смежных каналов.\n\n"
-                        "Для каждого поста:\n"
-                        "— Главная мысль (1 предложение)\n"
-                        "— Может ли вдохновить на пост в нашем канале? Если да — как именно\n\n"
-                        "Сгруппируй похожие темы. Будь лаконичен.\n\n"
+                        "Дайджест постов из других каналов.\n\n"
+                        "Для каждого: главная мысль (1 предложение) + можно ли использовать как идею.\n"
+                        "Похожие темы группируй. Кратко.\n\n"
                         f"ПОСТЫ:\n{posts_text}"
                     ),
                 }
@@ -164,7 +163,7 @@ class ClaudeEditor:
         """Свободный диалог с редактором."""
         response = await self._client.messages.create(
             model="claude-sonnet-4-6",
-            max_tokens=2048,
+            max_tokens=1024,
             system=self._system(),
             messages=[
                 {
