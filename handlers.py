@@ -470,21 +470,9 @@ async def cmd_fetch_channel(message: Message):
     thinking = await message.answer(f"⏳ Читаю посты из {channel}...")
     try:
         posts = await fetch_posts(channel)
-    except RuntimeError as e:
-        if "session_missing" in str(e):
-            await thinking.edit_text(
-                "❌ Нет авторизации Telethon.\n\n"
-                "Останови бота, запусти в терминале:\n"
-                "<code>python auth.py</code>\n\n"
-                "После авторизации снова запусти бота.",
-                parse_mode="HTML",
-            )
-        else:
-            await thinking.edit_text(f"Ошибка: {e}")
-        return
     except Exception as e:
         logger.error("Fetch error: %s", e)
-        await thinking.edit_text(f"Не удалось прочитать канал.\n{e}")
+        await thinking.edit_text(str(e) if isinstance(e, RuntimeError) else f"Не удалось прочитать канал.\n{e}")
         return
 
     if len(posts) < 3:
