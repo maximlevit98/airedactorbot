@@ -17,6 +17,15 @@ claude = ClaudeEditor()
 
 TG_LIMIT = 4096
 
+# Лимиты входящего текста — защита от случайных огромных вставок
+LIMIT_DRAFT = 3000        # черновик поста
+LIMIT_INSTRUCTIONS = 500  # инструкция к редактуре
+LIMIT_CONTEXT = 1000      # контекст для идей
+LIMIT_TOPIC = 500         # тема для плана
+LIMIT_POSTS = 8000        # посты для дайджеста / анализа стиля
+LIMIT_CHAT = 2000         # сообщение в свободном чате
+CHAT_HISTORY_TURNS = 3    # сколько пар user/assistant хранить в истории
+
 
 async def _send(message: Message, text: str, **kwargs) -> None:
     """Отправляет текст, разбивая на части если > 4096 символов."""
@@ -48,6 +57,17 @@ async def _safe_delete(msg: Message) -> None:
         await msg.delete()
     except Exception:
         pass
+
+
+async def _check_limit(message: Message, limit: int) -> bool:
+    """Возвращает False и отвечает пользователю если текст превышает лимит."""
+    if len(message.text) > limit:
+        await message.answer(
+            f"⚠️ Текст слишком длинный ({len(message.text)} символов, максимум {limit}).\n"
+            "Сократи и отправь снова."
+        )
+        return False
+    return True
 
 
 class IdeasFlow(StatesGroup):
@@ -126,7 +146,7 @@ async def cb_cancel(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "action:menu")
 async def cb_menu(callback: CallbackQuery, state: FSMContext):
-    await state.clear()
+    await state.set_state(None)  # данные (в т.ч. история чата) не стираем
     await callback.message.edit_text("Выбери действие:", reply_markup=main_menu())
     await callback.answer()
 
@@ -154,6 +174,8 @@ async def cb_ideas(callback: CallbackQuery, state: FSMContext):
 
 @router.message(IdeasFlow.waiting_for_context)
 async def handle_ideas_context(message: Message, state: FSMContext):
+    if not await _check_limit(message, LIMIT_CONTEXT):
+        return
     await state.update_data(ideas_context=message.text)
     thinking = await message.answer("⏳ Генерирую идеи...")
     try:
@@ -209,6 +231,8 @@ async def cb_plan(callback: CallbackQuery, state: FSMContext):
 
 @router.message(PlanFlow.waiting_for_topic)
 async def handle_plan_topic(message: Message, state: FSMContext):
+    if not await _check_limit(message, LIMIT_TOPIC):
+        return
     await state.update_data(plan_topic=message.text)
     thinking = await message.answer("⏳ Составляю план...")
     try:
@@ -258,6 +282,8 @@ async def cb_edit(callback: CallbackQuery, state: FSMContext):
 
 @router.message(EditFlow.waiting_for_draft)
 async def handle_edit_draft(message: Message, state: FSMContext):
+    if not await _check_limit(message, LIMIT_DRAFT):
+        return
     await state.update_data(edit_draft=message.text)
     await state.set_state(EditFlow.waiting_for_instructions)
     await message.answer(
@@ -268,6 +294,8 @@ async def handle_edit_draft(message: Message, state: FSMContext):
 
 @router.message(EditFlow.waiting_for_instructions)
 async def handle_edit_instructions(message: Message, state: FSMContext):
+    if not await _check_limit(message, LIMIT_INSTRUCTIONS):
+        return
     data = await state.get_data()
     draft = data.get("edit_draft", "")
     await state.update_data(edit_instructions=message.text)
@@ -307,9 +335,13 @@ async def cb_retry_edit(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "action:edit_again")
 async def cb_edit_again(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    draft = data.get("edit_draft", "")
+    preview = (draft[:150] + "…") if len(draft) > 150 else draft
     await state.set_state(EditFlow.waiting_for_instructions)
     await callback.message.edit_text(
-        "Напиши новую инструкцию для редактуры:",
+        f"Черновик:\n<i>{preview}</i>\n\nНапиши новую инструкцию:",
+        parse_mode="HTML",
         reply_markup=cancel_keyboard(),
     )
     await callback.answer()
@@ -338,6 +370,8 @@ async def cb_digest(callback: CallbackQuery, state: FSMContext):
 
 @router.message(DigestFlow.waiting_for_posts)
 async def handle_digest_posts(message: Message, state: FSMContext):
+    if not await _check_limit(message, LIMIT_POSTS):
+        return
     posts = [p.strip() for p in message.text.split("---") if p.strip()]
     if not posts:
         await message.answer("Нужен хотя бы один пост. Попробуй ещё раз.")
@@ -353,6 +387,26 @@ async def handle_digest_posts(message: Message, state: FSMContext):
     await state.set_state(None)
     await _safe_delete(thinking)
     await _send(message, result, reply_markup=digest_keyboard())
+
+
+@router.callback_query(F.data == "action:retry_digest")
+async def cb_retry_digest(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    raw = data.get("digest_posts")
+    if not raw:
+        await callback.answer("Нет данных для повтора.", show_alert=True)
+        return
+    await callback.answer()
+    posts = [p.strip() for p in raw.split("---") if p.strip()]
+    thinking = await callback.message.answer("⏳ Анализирую снова...")
+    try:
+        result = await claude.digest_channels(posts)
+    except Exception as e:
+        logger.error("Claude error: %s", e)
+        await thinking.edit_text("Ошибка. Попробуй позже.")
+        return
+    await _safe_delete(thinking)
+    await _send(callback.message, result, reply_markup=digest_keyboard())
 
 
 # ── STYLE ─────────────────────────────────────────────────────────────────────
@@ -378,6 +432,8 @@ async def cb_style(callback: CallbackQuery, state: FSMContext):
 
 @router.message(StyleFlow.waiting_for_posts)
 async def handle_style_posts(message: Message, state: FSMContext):
+    if not await _check_limit(message, LIMIT_POSTS):
+        return
     posts = [p.strip() for p in message.text.split("---") if p.strip()]
     if len(posts) < 3:
         await message.answer("Нужно минимум 3 поста для анализа. Разделяй их через ---")
@@ -397,15 +453,31 @@ async def handle_style_posts(message: Message, state: FSMContext):
 # ── FREE CHAT ─────────────────────────────────────────────────────────────────
 
 @router.message(StateFilter(None))
-async def free_chat(message: Message):
-    if not message.text:
+async def free_chat(message: Message, state: FSMContext):
+    if not message.text or len(message.text) < 2:
         return
+    if not await _check_limit(message, LIMIT_CHAT):
+        return
+
+    # Ведём историю — не более CHAT_HISTORY_TURNS пар сообщений
+    data = await state.get_data()
+    history: list[dict] = data.get("chat_history", [])
+    history.append({"role": "user", "content": message.text})
+
     thinking = await message.answer("⏳")
     try:
-        result = await claude.chat(message.text)
+        result = await claude.chat(history)
     except Exception as e:
         logger.error("Claude error: %s", e)
         await thinking.edit_text("Ошибка. Попробуй позже.")
         return
+
+    history.append({"role": "assistant", "content": result})
+    # Обрезаем до нужного количества пар (каждая пара = 2 элемента)
+    max_msgs = CHAT_HISTORY_TURNS * 2
+    if len(history) > max_msgs:
+        history = history[-max_msgs:]
+    await state.update_data(chat_history=history)
+
     await _safe_delete(thinking)
     await _send(message, result, reply_markup=main_menu())

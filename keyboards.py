@@ -65,7 +65,10 @@ def edit_result_keyboard() -> InlineKeyboardMarkup:
 def digest_keyboard() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.row(
+        InlineKeyboardButton(text="🔄 Ещё раз", callback_data="action:retry_digest"),
         InlineKeyboardButton(text="💡 Идеи на основе", callback_data="action:ideas"),
+    )
+    builder.row(
         InlineKeyboardButton(text="◀️ В меню", callback_data="action:menu"),
     )
     return builder.as_markup()

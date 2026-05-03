@@ -40,10 +40,10 @@ class ClaudeEditor:
         ]
 
     async def analyze_style(self, posts: list[str]) -> dict:
-        """Глубокий анализ стиля канала. Opus-4-6 — задача одноразовая и сложная."""
+        """Глубокий анализ стиля канала."""
         posts_text = "\n\n---\n\n".join(posts)
         response = await self._client.messages.create(
-            model="claude-opus-4-6",
+            model="claude-sonnet-4-6",
             max_tokens=2048,
             system=self._system(),
             messages=[
@@ -159,17 +159,12 @@ class ClaudeEditor:
         )
         return response.content[0].text
 
-    async def chat(self, message: str) -> str:
-        """Свободный диалог с редактором."""
+    async def chat(self, history: list[dict]) -> str:
+        """Свободный диалог. Haiku — дешевле в 5× чем Sonnet, для чата достаточно."""
         response = await self._client.messages.create(
-            model="claude-sonnet-4-6",
+            model="claude-haiku-4-5-20251001",
             max_tokens=1024,
             system=self._system(),
-            messages=[
-                {
-                    "role": "user",
-                    "content": message,
-                }
-            ],
+            messages=history,
         )
         return response.content[0].text
