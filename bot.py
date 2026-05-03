@@ -21,6 +21,7 @@ BOT_COMMANDS = [
     BotCommand(command="edit", description="Редактура черновика"),
     BotCommand(command="digest", description="Дайджест каналов"),
     BotCommand(command="style", description="Анализ стиля канала"),
+    BotCommand(command="fetch_channel", description="Выгрузить посты из канала"),
     BotCommand(command="cancel", description="Отменить текущее действие"),
 ]
 

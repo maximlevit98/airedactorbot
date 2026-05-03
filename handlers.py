@@ -1,10 +1,12 @@
 import logging
+import os
 from aiogram import Router, F
 from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import Message, CallbackQuery
 
+from channel_reader import fetch_posts
 from claude_client import ClaudeEditor
 from keyboards import (
     main_menu, cancel_keyboard, ideas_keyboard,
@@ -446,6 +448,63 @@ async def handle_style_posts(message: Message, state: FSMContext):
         await thinking.edit_text("Ошибка при обращении к Claude. Попробуй позже.")
         return
     await state.set_state(None)
+    await _safe_delete(thinking)
+    await _send(message, _format_style(profile), parse_mode="HTML", reply_markup=style_keyboard())
+
+
+# ── FETCH CHANNEL ─────────────────────────────────────────────────────────────
+
+@router.message(Command("fetch_channel"))
+async def cmd_fetch_channel(message: Message):
+    args = message.text.split(maxsplit=1)
+    channel = args[1].strip() if len(args) > 1 else os.getenv("CHANNEL_USERNAME", "")
+
+    if not channel:
+        await message.answer(
+            "Укажи канал: <code>/fetch_channel @username</code>\n"
+            "Или добавь <code>CHANNEL_USERNAME=@username</code> в .env",
+            parse_mode="HTML",
+        )
+        return
+
+    thinking = await message.answer(f"⏳ Читаю посты из {channel}...")
+    try:
+        posts = await fetch_posts(channel)
+    except RuntimeError as e:
+        if "session_missing" in str(e):
+            await thinking.edit_text(
+                "❌ Нет авторизации Telethon.\n\n"
+                "Останови бота, запусти в терминале:\n"
+                "<code>python auth.py</code>\n\n"
+                "После авторизации снова запусти бота.",
+                parse_mode="HTML",
+            )
+        else:
+            await thinking.edit_text(f"Ошибка: {e}")
+        return
+    except Exception as e:
+        logger.error("Fetch error: %s", e)
+        await thinking.edit_text(f"Не удалось прочитать канал.\n{e}")
+        return
+
+    if len(posts) < 3:
+        await thinking.edit_text(
+            f"Нашёл только {len(posts)} постов — недостаточно для анализа.\n"
+            "Нужно минимум 3."
+        )
+        return
+
+    await thinking.edit_text(
+        f"⏳ Выгружено {len(posts)} постов, анализирую стиль…\n"
+        "(это займёт полминуты)"
+    )
+    try:
+        profile = await claude.analyze_style(posts)
+    except Exception as e:
+        logger.error("Claude error: %s", e)
+        await thinking.edit_text("Ошибка при анализе. Попробуй позже.")
+        return
+
     await _safe_delete(thinking)
     await _send(message, _format_style(profile), parse_mode="HTML", reply_markup=style_keyboard())
 
