@@ -74,6 +74,26 @@ def digest_keyboard() -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
+def pool_progress_keyboard(pool_idx: int, total_pools: int) -> InlineKeyboardMarkup:
+    """Клавиатура после анализа очередного пула."""
+    builder = InlineKeyboardBuilder()
+    if pool_idx < total_pools - 1:
+        builder.row(
+            InlineKeyboardButton(
+                text=f"▶️ Следующий пул ({pool_idx + 2}/{total_pools})",
+                callback_data="fetch:next_pool",
+            )
+        )
+    else:
+        builder.row(
+            InlineKeyboardButton(text="✅ Объединить всё", callback_data="fetch:merge"),
+        )
+    builder.row(
+        InlineKeyboardButton(text="◀️ В меню", callback_data="action:menu"),
+    )
+    return builder.as_markup()
+
+
 def fetch_cache_keyboard() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.row(

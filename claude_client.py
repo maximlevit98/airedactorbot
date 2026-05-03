@@ -40,10 +40,10 @@ class ClaudeEditor:
         ]
 
     async def analyze_style(self, posts: list[str]) -> dict:
-        """Глубокий анализ стиля канала."""
+        """Глубокий анализ стиля канала. Opus — задача одноразовая, результат кэшируется."""
         posts_text = "\n\n---\n\n".join(posts)
         response = await self._client.messages.create(
-            model="claude-sonnet-4-6",
+            model="claude-opus-4-6",
             max_tokens=2048,
             system=self._system(),
             messages=[
@@ -68,6 +68,36 @@ class ClaudeEditor:
         )
         raw = response.content[0].text.strip()
         # Claude иногда оборачивает JSON в ```json...``` несмотря на инструкцию
+        if raw.startswith("```"):
+            raw = raw.split("\n", 1)[-1]
+            raw = raw.rsplit("```", 1)[0].strip()
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            return {"raw": raw, "error": True}
+
+    async def merge_style_analyses(self, analyses: list[dict]) -> dict:
+        """Объединяет несколько частичных анализов в один итоговый профиль. Opus."""
+        analyses_text = json.dumps(analyses, ensure_ascii=False, indent=2)
+        response = await self._client.messages.create(
+            model="claude-opus-4-6",
+            max_tokens=2048,
+            system=self._system(),
+            messages=[
+                {
+                    "role": "user",
+                    "content": (
+                        "Объедини несколько частичных анализов стиля одного канала в один итоговый профиль.\n\n"
+                        "Верни строго валидный JSON без markdown-обёртки с теми же полями:\n"
+                        '"tone", "topics", "avg_length", "emoji_style", "structure", '
+                        '"vocabulary", "hooks", "cta", "summary"\n\n'
+                        "Учти все части равномерно. В summary — финальный вывод о голосе канала.\n\n"
+                        f"ЧАСТИ:\n{analyses_text}"
+                    ),
+                }
+            ],
+        )
+        raw = response.content[0].text.strip()
         if raw.startswith("```"):
             raw = raw.split("\n", 1)[-1]
             raw = raw.rsplit("```", 1)[0].strip()

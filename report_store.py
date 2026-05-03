@@ -18,7 +18,14 @@ def _channel_slug(channel: str) -> str:
     return channel.lstrip("@").lower()
 
 
-def save_report(channel: str, posts: list[str], total: int, analysis: dict) -> Path:
+def save_report(
+    channel: str,
+    posts: list[str],
+    total: int,
+    analysis: dict,
+    all_posts: Optional[list[str]] = None,
+    pool_analyses: Optional[list[dict]] = None,
+) -> Path:
     """Сохраняет отчёт в JSON. Возвращает путь к файлу."""
     REPORTS_DIR.mkdir(exist_ok=True)
     slug = _channel_slug(channel)
@@ -30,6 +37,8 @@ def save_report(channel: str, posts: list[str], total: int, analysis: dict) -> P
         "total_fetched": total,
         "posts_for_analysis": len(posts),
         "posts": posts,
+        "all_posts": all_posts or posts,
+        "pool_analyses": pool_analyses or [],
         "analysis": analysis,
     }
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")

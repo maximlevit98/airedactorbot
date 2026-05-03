@@ -9,8 +9,8 @@ from bs4 import BeautifulSoup
 
 logger = logging.getLogger(__name__)
 
-MIN_POST_LEN = 80       # пропускаем слишком короткие сообщения
-MAX_ANALYSIS_CHARS = 25000  # лимит для передачи в Claude
+MIN_POST_LEN = 80        # пропускаем слишком короткие сообщения
+POOL_CHARS = 12000       # размер одного пула для анализа (~25-35 постов)
 
 
 async def fetch_all_posts(channel: str, max_pages: int = 30) -> tuple[list[str], int]:
@@ -61,13 +61,18 @@ async def fetch_all_posts(channel: str, max_pages: int = 30) -> tuple[list[str],
     return all_posts, total
 
 
-def select_for_analysis(posts: list[str], max_chars: int = MAX_ANALYSIS_CHARS) -> list[str]:
-    """Берёт первые (самые новые) посты суммарно не более max_chars символов."""
-    selected: list[str] = []
+def make_pools(posts: list[str], pool_chars: int = POOL_CHARS) -> list[list[str]]:
+    """Разбивает посты на пулы для батчевого анализа."""
+    pools: list[list[str]] = []
+    current: list[str] = []
     chars = 0
     for post in posts:
-        if chars + len(post) > max_chars:
-            break
-        selected.append(post)
+        if chars + len(post) > pool_chars and current:
+            pools.append(current)
+            current = []
+            chars = 0
+        current.append(post)
         chars += len(post)
-    return selected
+    if current:
+        pools.append(current)
+    return pools

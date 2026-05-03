@@ -6,13 +6,14 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import Message, CallbackQuery
 
-from channel_reader import fetch_all_posts, select_for_analysis
+from channel_reader import fetch_all_posts, make_pools
 from report_store import save_report, load_latest_report
 from claude_client import ClaudeEditor
 from keyboards import (
     main_menu, cancel_keyboard, ideas_keyboard,
     plan_keyboard, edit_result_keyboard, digest_keyboard, style_keyboard,
     fetch_cache_keyboard,
+    pool_progress_keyboard,
 )
 
 logger = logging.getLogger(__name__)
@@ -473,7 +474,7 @@ async def handle_style_posts(message: Message, state: FSMContext):
 # ── FETCH CHANNEL ─────────────────────────────────────────────────────────────
 
 async def _do_fetch_and_analyze(message: Message, state: FSMContext, channel: str) -> None:
-    """Выгружает посты, анализирует, сохраняет отчёт."""
+    """Выгружает посты, разбивает на пулы, запускает анализ первого пула."""
     thinking = await message.answer(f"⏳ Читаю все посты из {channel}…")
     try:
         all_posts, total = await fetch_all_posts(channel)
@@ -486,30 +487,64 @@ async def _do_fetch_and_analyze(message: Message, state: FSMContext, channel: st
         await thinking.edit_text(f"Нашёл только {total} постов — недостаточно для анализа.")
         return
 
-    posts_for_analysis = select_for_analysis(all_posts)
-    await thinking.edit_text(
-        f"⏳ Найдено <b>{total}</b> постов, в анализ идёт <b>{len(posts_for_analysis)}</b>…\n"
-        "(это займёт полминуты)",
-        parse_mode="HTML",
+    pools = make_pools(all_posts)
+    await state.update_data(
+        fetch_channel=channel,
+        fetch_all_posts=all_posts,
+        fetch_total=total,
+        fetch_pools=pools,
+        fetch_pool_idx=0,
+        fetch_pool_analyses=[],
     )
+    await _analyze_pool(message, state, thinking=thinking)
+
+
+async def _analyze_pool(message: Message, state: FSMContext, thinking=None) -> None:
+    """Анализирует текущий пул и показывает результат с кнопкой продолжения."""
+    data = await state.get_data()
+    pools = data.get("fetch_pools", [])
+    idx = data.get("fetch_pool_idx", 0)
+    total = data.get("fetch_total", 0)
+    channel = data.get("fetch_channel", "")
+    prev_analyses = data.get("fetch_pool_analyses", [])
+
+    pool = pools[idx]
+    total_pools = len(pools)
+
+    if thinking:
+        await thinking.edit_text(
+            f"⏳ Анализирую пул {idx + 1}/{total_pools} "
+            f"({len(pool)} постов из {total})…",
+            parse_mode="HTML",
+        )
+    else:
+        thinking = await message.answer(
+            f"⏳ Анализирую пул {idx + 1}/{total_pools} "
+            f"({len(pool)} постов из {total})…"
+        )
+
     try:
-        profile = await claude.analyze_style(posts_for_analysis)
+        profile = await claude.analyze_style(pool)
     except Exception as e:
         logger.error("Claude error: %s", e)
         await thinking.edit_text("Ошибка при анализе. Попробуй позже.")
         return
 
-    report_path = save_report(channel, posts_for_analysis, total, profile)
+    new_analyses = prev_analyses + [profile]
+    await state.update_data(fetch_pool_analyses=new_analyses)
     await _safe_delete(thinking)
 
-    summary = (
-        f"📊 <b>Отчёт по {channel}</b>\n"
-        f"Всего постов в канале: <b>{total}</b>\n"
-        f"Проанализировано: <b>{len(posts_for_analysis)}</b>\n"
-        f"Сохранено: <code>{report_path.name}</code>\n\n"
+    header = (
+        f"📊 <b>Пул {idx + 1}/{total_pools}</b> — постов {len(pool)} "
+        f"(всего в канале: {total})\n\n"
     )
-    await message.answer(summary, parse_mode="HTML")
-    await _send(message, _format_style(profile), parse_mode="HTML", reply_markup=style_keyboard())
+    await message.answer(header, parse_mode="HTML")
+    await _send(
+        message,
+        _format_style(profile),
+        parse_mode="HTML",
+        reply_markup=pool_progress_keyboard(idx, total_pools),
+    )
 
 
 @router.message(Command("fetch_channel"))
@@ -543,6 +578,51 @@ async def cmd_fetch_channel(message: Message, state: FSMContext):
         return
 
     await _do_fetch_and_analyze(message, state, channel)
+
+
+@router.callback_query(F.data == "fetch:next_pool")
+async def cb_next_pool(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    idx = data.get("fetch_pool_idx", 0)
+    await state.update_data(fetch_pool_idx=idx + 1)
+    await callback.answer()
+    await _analyze_pool(callback.message, state)
+
+
+@router.callback_query(F.data == "fetch:merge")
+async def cb_merge_analyses(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    analyses = data.get("fetch_pool_analyses", [])
+    channel = data.get("fetch_channel", "")
+    all_posts = data.get("fetch_all_posts", [])
+    total = data.get("fetch_total", 0)
+
+    if not analyses:
+        await callback.answer("Нет данных для объединения.", show_alert=True)
+        return
+
+    await callback.answer()
+    thinking = await callback.message.answer("⏳ Объединяю все анализы в финальный профиль…")
+    try:
+        final_profile = await claude.merge_style_analyses(analyses)
+    except Exception as e:
+        logger.error("Claude error: %s", e)
+        await thinking.edit_text("Ошибка при объединении. Попробуй позже.")
+        return
+
+    report_path = save_report(
+        channel, all_posts[:50], total, final_profile,
+        all_posts=all_posts, pool_analyses=analyses,
+    )
+    await _safe_delete(thinking)
+
+    header = (
+        f"✅ <b>Финальный профиль {channel}</b>\n"
+        f"Проанализировано постов: <b>{total}</b> ({len(analyses)} пулов)\n"
+        f"Сохранено: <code>{report_path.name}</code>\n\n"
+    )
+    await callback.message.answer(header, parse_mode="HTML")
+    await _send(callback.message, _format_style(final_profile), parse_mode="HTML", reply_markup=style_keyboard())
 
 
 @router.callback_query(F.data == "fetch:use_cache")
