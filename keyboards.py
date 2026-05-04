@@ -260,7 +260,7 @@ def settings_main_keyboard(settings: dict) -> InlineKeyboardMarkup:
         )
     )
     builder.row(
-        InlineKeyboardButton(text="📡 Мой канал", callback_data="set:channel"),
+        InlineKeyboardButton(text="📡 Мои каналы", callback_data="action:channels"),
     )
     builder.row(
         InlineKeyboardButton(text="🔄 Сбросить", callback_data="set:reset"),
@@ -305,5 +305,73 @@ def settings_length_keyboard(current: str) -> InlineKeyboardMarkup:
         )
     builder.row(
         InlineKeyboardButton(text="◀️ Назад", callback_data="set:back"),
+    )
+    return builder.as_markup()
+
+
+# ── CHANNELS ──────────────────────────────────────────────────────────────────
+
+def channels_list_keyboard(channels_info: list) -> InlineKeyboardMarkup:
+    """Список каналов пользователя с кнопками просмотра/удаления."""
+    builder = InlineKeyboardBuilder()
+    for info in channels_info:
+        channel = info.get("channel", "")
+        slug = channel.lstrip("@")
+        builder.row(
+            InlineKeyboardButton(
+                text=f"📊 {channel}",
+                callback_data=f"channel:view:{slug}",
+            ),
+            InlineKeyboardButton(
+                text="🗑",
+                callback_data=f"channel:del:{slug}",
+            ),
+        )
+    builder.row(
+        InlineKeyboardButton(text="➕ Добавить канал", callback_data="channel:add"),
+    )
+    builder.row(
+        InlineKeyboardButton(text="◀️ В меню", callback_data="action:menu"),
+    )
+    return builder.as_markup()
+
+
+def style_picker_keyboard(channels_info: list) -> InlineKeyboardMarkup:
+    """Выбор стиля перед созданием поста."""
+    builder = InlineKeyboardBuilder()
+    for info in channels_info:
+        channel = info.get("channel", "")
+        slug = channel.lstrip("@")
+        builder.row(
+            InlineKeyboardButton(
+                text=f"✍️ {channel}",
+                callback_data=f"style:pick:{slug}",
+            )
+        )
+    builder.row(
+        InlineKeyboardButton(text="🚫 Без стиля", callback_data="style:pick:none"),
+    )
+    builder.row(
+        InlineKeyboardButton(text="◀️ Отмена", callback_data="action:menu"),
+    )
+    return builder.as_markup()
+
+
+def channel_view_keyboard(channel: str) -> InlineKeyboardMarkup:
+    """Кнопки на экране просмотра анализа канала."""
+    slug = channel.lstrip("@")
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(
+            text="🔄 Обновить анализ",
+            callback_data=f"channel:refresh:{slug}",
+        ),
+        InlineKeyboardButton(
+            text="🗑 Удалить",
+            callback_data=f"channel:del:{slug}",
+        ),
+    )
+    builder.row(
+        InlineKeyboardButton(text="◀️ Назад", callback_data="action:channels"),
     )
     return builder.as_markup()

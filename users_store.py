@@ -44,7 +44,8 @@ def _default_profile(user_id: int) -> dict:
     return {
         "user_id": user_id,
         "joined_at": datetime.now().isoformat(),
-        "channel": "",            # @username канала
+        "channel": "",            # @username канала (основной, для обратной совместимости)
+        "channels": [],           # список всех каналов пользователя
         "credits": 0,             # текущий баланс
         "free_post_used": False,  # использован ли бесплатный первый пост
         "total_posts": 0,         # всего завершённых постов
@@ -81,7 +82,7 @@ def _save(user_id: int, profile: dict) -> None:
 
 
 def set_channel(user_id: int, channel: str) -> None:
-    """Сохраняет канал пользователя."""
+    """Сохраняет канал пользователя (основной, для обратной совместимости)."""
     profile = get_user(user_id)
     profile["channel"] = channel.strip()
     _save(user_id, profile)
@@ -90,6 +91,49 @@ def set_channel(user_id: int, channel: str) -> None:
 def get_channel(user_id: int) -> str:
     """Возвращает канал пользователя или ''."""
     return get_user(user_id).get("channel", "")
+
+
+def add_channel(user_id: int, channel: str) -> list:
+    """Добавляет канал в список если его нет. Возвращает актуальный список."""
+    channel = channel.strip()
+    if not channel.startswith("@"):
+        channel = "@" + channel
+    profile = get_user(user_id)
+    channels: list = profile.get("channels", [])
+    if channel not in channels:
+        channels.append(channel)
+        profile["channels"] = channels
+        _save(user_id, profile)
+    return channels
+
+
+def remove_channel(user_id: int, channel: str) -> list:
+    """Удаляет канал из списка. Возвращает актуальный список."""
+    channel = channel.strip()
+    if not channel.startswith("@"):
+        channel = "@" + channel
+    profile = get_user(user_id)
+    channels: list = profile.get("channels", [])
+    channels = [c for c in channels if c != channel]
+    profile["channels"] = channels
+    # Если удалили основной канал — сбрасываем его тоже
+    if profile.get("channel") == channel:
+        profile["channel"] = channels[0] if channels else ""
+    _save(user_id, profile)
+    return channels
+
+
+def get_channels(user_id: int) -> list:
+    """Возвращает список каналов пользователя."""
+    profile = get_user(user_id)
+    channels: list = profile.get("channels", [])
+    # Миграция: если список пуст но есть одиночный канал — добавляем его
+    legacy = profile.get("channel", "")
+    if not channels and legacy:
+        channels = [legacy]
+        profile["channels"] = channels
+        _save(user_id, profile)
+    return channels
 
 
 # ── КРЕДИТЫ ──────────────────────────────────────────────────────────────────

@@ -14,6 +14,7 @@ from channel_reader import fetch_all_posts, make_pools
 from report_store import (
     save_report, load_latest_report,
     get_analyzed_hashes, load_latest_report_any_age, post_hash,
+    list_analyzed_channels, format_analysis_report,
 )
 from style_context import load_style_for_user, load_style_for_channel, style_hint
 from drafts_store import save_draft, load_drafts, load_draft, delete_draft
@@ -32,11 +33,13 @@ from keyboards import (
     drafts_list_keyboard, draft_item_keyboard,
     ready_posts_list_keyboard, ready_post_item_keyboard,
     settings_main_keyboard, settings_param_keyboard, settings_length_keyboard,
+    channels_list_keyboard, style_picker_keyboard, channel_view_keyboard,
 )
 from users_store import (
     get_user, set_channel, get_channel, get_balance,
     is_first_post_free, mark_first_post_used, mark_post_completed,
     deduct_credits, add_credits, track_usage,
+    add_channel, remove_channel, get_channels,
     CREDITS_NEW_POST, CREDITS_IDEAS, CREDITS_PLAN, CREDITS_EDIT, CREDITS_DIGEST,
 )
 from payments import (buy_keyboard, no_credits_keyboard, make_invoice_prices,
@@ -1025,21 +1028,42 @@ def _post_progress_label(data: dict) -> str:
     return ""
 
 
-async def _start_new_post(target, state: FSMContext, user_id: int, edit: bool = False):
+async def _start_new_post(target, state: FSMContext, user_id: int, edit: bool = False,
+                          style: str = None):
     """Очищает старые данные поста и начинает флоу с темы.
 
     target — Message или CallbackQuery.message.
     user_id — id пользователя (для подгрузки настроек тона).
     edit=True → редактирует существующее сообщение (для callback-контекста),
     edit=False → отправляет новое (для command-контекста).
+    style — если передан, использует его; иначе определяет автоматически.
     """
-    style = load_style_for_user(user_id)
     settings_block = format_for_prompt(load_settings(user_id))
+
+    # Определяем стиль: явный аргумент > автоматический выбор
+    if style is None:
+        analyzed = list_analyzed_channels(user_id)
+        if len(analyzed) == 0:
+            style = ""  # без стиля
+        elif len(analyzed) == 1:
+            style = load_style_for_channel(analyzed[0]["channel"], user_id)  # автоматически
+        else:
+            # Несколько каналов — предлагаем выбор и прерываем создание поста
+            await state.update_data(pending_new_post=True, pending_post_edit=edit)
+            await _safe_edit(
+                target,
+                "🎨 <b>Выбери стиль для поста:</b>",
+                parse_mode="HTML",
+                reply_markup=style_picker_keyboard(analyzed),
+            )
+            return
+
     # Чистим только post_* ключи + draft_id, остальные данные (чат, стиль анализа) не трогаем
     await state.update_data(
         post_topic=None, post_hooks_text=None, post_chosen_hook=None,
         post_plan=None, post_draft=None, draft_id=None,
         post_style=style, post_settings=settings_block,
+        pending_new_post=None, active_style_channel=None,
     )
     # Если первый пост — отметить использованным (списание было в check_credits)
     if is_first_post_free(user_id):
@@ -1596,13 +1620,26 @@ async def handle_set_channel(message: Message, state: FSMContext):
     channel = message.text.strip()
     if not channel.startswith("@"):
         channel = "@" + channel
-    set_channel(message.from_user.id, channel)
+    user_id = message.from_user.id
+    set_channel(user_id, channel)
+    add_channel(user_id, channel)
     await state.set_state(None)
+    slug = channel.lstrip("@")
     await message.answer(
-        f"✅ Канал сохранён: <code>{channel}</code>\n\n"
-        "Теперь можешь запустить анализ стиля через 🎨 Анализ стиля.",
+        f"✅ Канал {channel} добавлен!\n\nЗапустить анализ стиля прямо сейчас?",
         parse_mode="HTML",
-        reply_markup=main_menu(),
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="📊 Да, анализировать",
+                    callback_data=f"channel:refresh:{slug}",
+                ),
+                InlineKeyboardButton(
+                    text="Позже",
+                    callback_data="action:channels",
+                ),
+            ]
+        ]),
     )
 
 
@@ -1813,6 +1850,141 @@ async def handle_payment(message: Message, state: FSMContext):
         parse_mode="HTML",
         reply_markup=main_menu(),
     )
+
+
+# ── CHANNELS ─────────────────────────────────────────────────────────────────
+
+@router.callback_query(F.data == "action:channels")
+async def cb_channels_list(callback: CallbackQuery, state: FSMContext):
+    """Показывает список каналов пользователя с анализом."""
+    await callback.answer()
+    user_id = callback.from_user.id
+    channels_info = list_analyzed_channels(user_id)
+    if channels_info:
+        lines = []
+        for info in channels_info:
+            ch = info.get("channel", "")
+            cnt = info.get("posts_count", 0)
+            dt_raw = info.get("analyzed_at", "")
+            try:
+                from datetime import datetime as _dt
+                dt_str = _dt.fromisoformat(dt_raw).strftime("%d.%m.%Y") if dt_raw else "—"
+            except Exception:
+                dt_str = dt_raw[:10] if dt_raw else "—"
+            lines.append(f"• {ch} — {cnt} постов, {dt_str}")
+        channels_text = "\n".join(lines)
+    else:
+        channels_text = "Каналов нет — добавь первый!"
+    await _safe_edit(
+        callback.message,
+        f"📡 <b>Мои каналы</b>\n\nКаналы для анализа стиля:\n\n{channels_text}",
+        parse_mode="HTML",
+        reply_markup=channels_list_keyboard(channels_info),
+    )
+
+
+@router.callback_query(F.data == "channel:add")
+async def cb_channel_add(callback: CallbackQuery, state: FSMContext):
+    """Просит ввести @username нового канала."""
+    await callback.answer()
+    await _safe_edit(
+        callback.message,
+        "📡 <b>Добавить канал</b>\n\nВведи @username своего канала:",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="◀️ Назад", callback_data="action:channels")
+        ]]),
+    )
+    await state.set_state(ChannelFlow.waiting_for_channel)
+
+
+@router.callback_query(F.data.startswith("channel:view:"))
+async def cb_channel_view(callback: CallbackQuery, state: FSMContext):
+    """Показывает последний отчёт по каналу."""
+    slug = callback.data.split(":", 2)[2]
+    channel = "@" + slug
+    user_id = callback.from_user.id
+    await callback.answer()
+    report = load_latest_report_any_age(channel, user_id)
+    if not report:
+        await _safe_edit(
+            callback.message,
+            f"⚠️ Нет отчёта для {channel}.\n\nЗапусти анализ чтобы получить данные.",
+            parse_mode="HTML",
+            reply_markup=channel_view_keyboard(channel),
+        )
+        return
+    text = format_analysis_report(report)
+    await _safe_edit(
+        callback.message,
+        text,
+        parse_mode="HTML",
+        reply_markup=channel_view_keyboard(channel),
+    )
+
+
+@router.callback_query(F.data.startswith("channel:del:"))
+async def cb_channel_delete(callback: CallbackQuery, state: FSMContext):
+    """Удаляет канал из списка и показывает обновлённый список."""
+    slug = callback.data.split(":", 2)[2]
+    channel = "@" + slug
+    user_id = callback.from_user.id
+    remove_channel(user_id, channel)
+    await callback.answer(f"🗑 {channel} удалён")
+    # Показываем обновлённый список
+    channels_info = list_analyzed_channels(user_id)
+    if channels_info:
+        lines = []
+        for info in channels_info:
+            ch = info.get("channel", "")
+            cnt = info.get("posts_count", 0)
+            dt_raw = info.get("analyzed_at", "")
+            try:
+                from datetime import datetime as _dt
+                dt_str = _dt.fromisoformat(dt_raw).strftime("%d.%m.%Y") if dt_raw else "—"
+            except Exception:
+                dt_str = dt_raw[:10] if dt_raw else "—"
+            lines.append(f"• {ch} — {cnt} постов, {dt_str}")
+        channels_text = "\n".join(lines)
+    else:
+        channels_text = "Каналов нет — добавь первый!"
+    await _safe_edit(
+        callback.message,
+        f"📡 <b>Мои каналы</b>\n\nКаналы для анализа стиля:\n\n{channels_text}",
+        parse_mode="HTML",
+        reply_markup=channels_list_keyboard(channels_info),
+    )
+
+
+@router.callback_query(F.data.startswith("channel:refresh:"))
+async def cb_channel_refresh(callback: CallbackQuery, state: FSMContext):
+    """Запускает повторный анализ канала."""
+    slug = callback.data.split(":", 2)[2]
+    channel = "@" + slug
+    user_id = callback.from_user.id
+    await callback.answer()
+    await _safe_edit(callback.message, f"⏳ Запускаю анализ {channel}…")
+    await _do_fetch_and_analyze(callback.message, state, channel, user_id)
+
+
+@router.callback_query(F.data.startswith("style:pick:"))
+async def cb_style_pick(callback: CallbackQuery, state: FSMContext):
+    """Пользователь выбрал стиль перед созданием поста."""
+    slug = callback.data.split(":", 2)[2]
+    user_id = callback.from_user.id
+    await callback.answer()
+    data = await state.get_data()
+    edit = data.get("pending_post_edit", True)
+
+    if slug == "none":
+        style = ""
+    else:
+        channel = "@" + slug
+        style = load_style_for_channel(channel, user_id)
+        await state.update_data(active_style_channel=channel)
+
+    # Продолжаем создание поста с выбранным стилем
+    await _start_new_post(callback.message, state, user_id, edit=edit, style=style)
 
 
 # ── ADMIN ─────────────────────────────────────────────────────────────────────
