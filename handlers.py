@@ -1817,7 +1817,7 @@ async def handle_payment(message: Message, state: FSMContext):
 
 # ── ADMIN ─────────────────────────────────────────────────────────────────────
 
-@router.message(Command("admin_stats"))
+@router.message(Command("admin_stats"), StateFilter("*"))
 async def cmd_admin_stats(message: Message, state: FSMContext):
     admin_id = int(_os.getenv("ADMIN_ID", "0"))
     if message.from_user.id != admin_id:
@@ -1840,7 +1840,7 @@ async def cmd_admin_stats(message: Message, state: FSMContext):
     )
 
 
-@router.message(Command("admin_topup"))
+@router.message(Command("admin_topup"), StateFilter("*"))
 async def cmd_admin_topup(message: Message, state: FSMContext):
     admin_id = int(_os.getenv("ADMIN_ID", "0"))
     if message.from_user.id != admin_id:
