@@ -20,7 +20,7 @@ async def fetch_all_posts(channel: str, max_pages: int = 30) -> tuple[list[str],
     Возвращает (все_посты, всего_найдено).
     Пагинация через ?before=ID — идём от новых к старым.
     """
-    username = channel.lstrip("@")
+    username = channel.lstrip("@").strip()
     url = f"https://t.me/s/{username}"
     headers = {"User-Agent": "Mozilla/5.0 (compatible; tg-editor-bot)"}
     all_posts: list[str] = []

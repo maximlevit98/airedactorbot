@@ -11,3 +11,9 @@ __pycache__/
 *.egg-info/
 dist/
 build/
+bot.log
+users/
+drafts/
+reports/
+settings/
+ready_posts/

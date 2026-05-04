@@ -7,6 +7,17 @@ from dotenv import load_dotenv
 logger = logging.getLogger(__name__)
 
 
+def _log_usage(method: str, response) -> None:
+    """Логирует использование токенов после каждого запроса к API."""
+    u = response.usage
+    cached = getattr(u, "cache_read_input_tokens", 0) or 0
+    fresh_input = u.input_tokens - cached
+    logger.info(
+        "[tokens] %s → вход: %d (кэш: %d) | выход: %d",
+        method, u.input_tokens, cached, u.output_tokens,
+    )
+
+
 def _extract_json(raw: str) -> dict:
     """
     Надёжно извлекает JSON из ответа Claude.
@@ -91,6 +102,7 @@ class ClaudeEditor:
                 }
             ],
         )
+        _log_usage("analyze_style", response)
         return _extract_json(response.content[0].text)
 
     async def merge_style_analyses(self, analyses: list[dict]) -> dict:
@@ -98,7 +110,7 @@ class ClaudeEditor:
         analyses_text = json.dumps(analyses, ensure_ascii=False, indent=2)
         response = await self._client.messages.create(
             model="claude-opus-4-6",
-            max_tokens=2048,
+            max_tokens=4096,
             system=self._system(),
             messages=[
                 {
@@ -118,13 +130,16 @@ class ClaudeEditor:
         if raw.startswith("```"):
             raw = raw.split("\n", 1)[-1]
             raw = raw.rsplit("```", 1)[0].strip()
+        _log_usage("merge_style_analyses", response)
         try:
             return json.loads(raw)
         except json.JSONDecodeError:
             return {"raw": raw, "error": True}
 
-    async def generate_ideas(self, context: str, count: int = 7) -> str:
+    async def generate_ideas(self, context: str, count: int = 7, style: str = "", settings: str = "") -> str:
         """Генерация идей для постов. Sonnet — основная рабочая задача."""
+        style_block = f"\n\n{style}" if style else ""
+        settings_block = f"\n\n{settings}" if settings else ""
         response = await self._client.messages.create(
             model="claude-sonnet-4-6",
             max_tokens=1024,
@@ -134,17 +149,22 @@ class ClaudeEditor:
                     "role": "user",
                     "content": (
                         f"Сгенерируй {count} идей для постов.\n\n"
-                        f"Контекст: {context}\n\n"
+                        f"Контекст: {context}"
+                        f"{style_block}"
+                        f"{settings_block}\n\n"
                         f"Для каждой идеи: заголовок (1 строка) + угол подачи (1–2 предложения).\n"
                         f"Нумеруй от 1 до {count}."
                     ),
                 }
             ],
         )
+        _log_usage("generate_ideas", response)
         return response.content[0].text
 
-    async def create_plan(self, topic: str) -> str:
+    async def create_plan(self, topic: str, style: str = "", settings: str = "") -> str:
         """Создать детальный план поста."""
+        style_block = f"\n\n{style}" if style else ""
+        settings_block = f"\n\n{settings}" if settings else ""
         response = await self._client.messages.create(
             model="claude-sonnet-4-6",
             max_tokens=1200,
@@ -153,7 +173,9 @@ class ClaudeEditor:
                 {
                     "role": "user",
                     "content": (
-                        f"Составь план поста на тему:\n{topic}\n\n"
+                        f"Составь план поста на тему:\n{topic}"
+                        f"{style_block}"
+                        f"{settings_block}\n\n"
                         "1. Хук — 1–2 предложения\n"
                         "2. Основная мысль\n"
                         "3. Структура — 3–5 блоков с тезисами\n"
@@ -164,10 +186,13 @@ class ClaudeEditor:
                 }
             ],
         )
+        _log_usage("create_plan", response)
         return response.content[0].text
 
-    async def edit_draft(self, draft: str, instructions: str) -> str:
+    async def edit_draft(self, draft: str, instructions: str, style: str = "", settings: str = "") -> str:
         """Редактировать черновик по инструкции автора."""
+        style_block = f"\n\n{style}" if style else ""
+        settings_block = f"\n\n{settings}" if settings else ""
         response = await self._client.messages.create(
             model="claude-sonnet-4-6",
             max_tokens=1024,
@@ -176,13 +201,86 @@ class ClaudeEditor:
                 {
                     "role": "user",
                     "content": (
-                        f"Отредактируй черновик поста по инструкции.\n\n"
+                        f"Отредактируй черновик поста по инструкции."
+                        f"{style_block}"
+                        f"{settings_block}\n\n"
                         f"ИНСТРУКЦИЯ: {instructions}\n\n"
                         f"ЧЕРНОВИК:\n{draft}"
                     ),
                 }
             ],
         )
+        _log_usage("edit_draft", response)
+        return response.content[0].text
+
+    async def generate_hooks(self, topic: str, style: str = "", settings: str = "") -> str:
+        """3 варианта хука (первой фразы) для поста."""
+        style_block = f"\n\n{style}" if style else ""
+        settings_block = f"\n\n{settings}" if settings else ""
+        response = await self._client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=600,
+            system=self._system(),
+            messages=[{
+                "role": "user",
+                "content": (
+                    f"Придумай 3 разных хука (первая фраза поста) на тему:\n{topic}"
+                    f"{style_block}"
+                    f"{settings_block}\n\n"
+                    "Каждый хук — 1-2 предложения. Нумеруй: 1. 2. 3.\n"
+                    "Подходы разные: эмоция, вопрос, провокация или факт."
+                ),
+            }],
+        )
+        _log_usage("generate_hooks", response)
+        return response.content[0].text
+
+    async def write_draft_from_plan(
+        self, topic: str, hook: str, plan: str, style: str = "", settings: str = ""
+    ) -> str:
+        """Пишет готовый черновик по теме, хуку и плану."""
+        style_block = f"\n\n{style}" if style else ""
+        settings_block = f"\n\n{settings}" if settings else ""
+        hook_block = f"\nХук (первая фраза): {hook}" if hook else ""
+        response = await self._client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=1200,
+            system=self._system(),
+            messages=[{
+                "role": "user",
+                "content": (
+                    f"Напиши готовый пост по этим данным:\n"
+                    f"Тема: {topic}"
+                    f"{hook_block}\n"
+                    f"План:\n{plan}"
+                    f"{style_block}"
+                    f"{settings_block}\n\n"
+                    "Только текст поста, без пояснений."
+                ),
+            }],
+        )
+        _log_usage("write_draft_from_plan", response)
+        return response.content[0].text
+
+    async def quick_post(self, topic: str, style: str = "", settings: str = "") -> str:
+        """Быстрый режим: тема → готовый пост за один шаг."""
+        style_block = f"\n\n{style}" if style else ""
+        settings_block = f"\n\n{settings}" if settings else ""
+        response = await self._client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=1200,
+            system=self._system(),
+            messages=[{
+                "role": "user",
+                "content": (
+                    f"Напиши готовый пост на тему:\n{topic}"
+                    f"{style_block}"
+                    f"{settings_block}\n\n"
+                    "Только текст поста, без пояснений."
+                ),
+            }],
+        )
+        _log_usage("quick_post", response)
         return response.content[0].text
 
     async def digest_channels(self, posts: list[str]) -> str:
@@ -204,6 +302,7 @@ class ClaudeEditor:
                 }
             ],
         )
+        _log_usage("digest_channels", response)
         return response.content[0].text
 
     async def chat(self, history: list[dict]) -> str:
@@ -214,4 +313,5 @@ class ClaudeEditor:
             system=self._system(),
             messages=history,
         )
+        _log_usage("chat", response)
         return response.content[0].text

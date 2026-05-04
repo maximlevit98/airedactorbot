@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 
 BOT_COMMANDS = [
     BotCommand(command="start", description="Главное меню"),
+    BotCommand(command="new_post", description="Написать новый пост"),
     BotCommand(command="ideas", description="Идеи для постов"),
     BotCommand(command="plan", description="План поста"),
     BotCommand(command="edit", description="Редактура черновика"),
