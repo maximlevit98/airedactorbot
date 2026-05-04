@@ -837,23 +837,26 @@ async def _analyze_pool(message: Message, state: FSMContext, user_id: int, think
     await state.update_data(fetch_pool_analyses=new_analyses)
     await _safe_delete(thinking)
 
+    # Показываем краткий результат пула
     if is_incremental:
         header = (
-            f"📊 <b>Пул {idx + 1}/{total_pools}</b> — {len(pool)} из <b>{new_count} новых</b> постов\n"
-            f"(всего в канале: {total})\n\n"
+            f"✅ <b>Пул {idx + 1}/{total_pools}</b> проанализирован "
+            f"({len(pool)} из {new_count} новых постов)"
         )
     else:
         header = (
-            f"📊 <b>Пул {idx + 1}/{total_pools}</b> — постов {len(pool)} "
-            f"(всего в канале: {total})\n\n"
+            f"✅ <b>Пул {idx + 1}/{total_pools}</b> проанализирован "
+            f"({len(pool)} постов)"
         )
     await message.answer(header, parse_mode="HTML")
-    await _send(
-        message,
-        _format_style(profile),
-        parse_mode="HTML",
-        reply_markup=pool_progress_keyboard(idx, total_pools),
-    )
+
+    # Автоматически переходим к следующему пулу или объединяем
+    if idx + 1 < total_pools:
+        await state.update_data(fetch_pool_idx=idx + 1)
+        await _analyze_pool(message, state, user_id=user_id)
+    else:
+        # Все пулы готовы — объединяем автоматически
+        await _auto_merge(message, state, user_id)
 
 
 @router.message(Command("fetch_channel"))
@@ -898,6 +901,50 @@ async def cb_next_pool(callback: CallbackQuery, state: FSMContext):
     await state.update_data(fetch_pool_idx=idx + 1)
     await callback.answer()
     await _analyze_pool(callback.message, state, user_id=user_id)
+
+
+async def _auto_merge(message: Message, state: FSMContext, user_id: int) -> None:
+    """Автоматически объединяет все пулы после завершения анализа."""
+    data = await state.get_data()
+    analyses = data.get("fetch_pool_analyses", [])
+    existing_profile = data.get("fetch_existing_profile")
+    channel = data.get("fetch_channel", "")
+    all_posts = data.get("fetch_all_posts", [])
+    total = data.get("fetch_total", 0)
+    new_count = data.get("fetch_new_count", total)
+
+    thinking = await message.answer("⏳ Объединяю все анализы в финальный профиль…")
+    all_to_merge = ([existing_profile] if existing_profile else []) + analyses
+
+    try:
+        if len(all_to_merge) == 1:
+            final_profile = all_to_merge[0]
+        else:
+            final_profile = await claude.merge_style_analyses(all_to_merge)
+    except Exception as e:
+        logger.error("Claude error: %s", e)
+        await thinking.edit_text("Ошибка при объединении. Попробуй позже.")
+        return
+
+    report_path = save_report(
+        channel, all_posts, total, final_profile,
+        user_id=user_id, all_posts=all_posts, pool_analyses=analyses,
+    )
+    await _safe_delete(thinking)
+
+    is_incremental = existing_profile is not None
+    if is_incremental:
+        header = (
+            f"✅ <b>Профиль обновлён: {channel}</b>\n"
+            f"Добавлено новых постов: <b>{new_count}</b> | всего в канале: <b>{total}</b>\n\n"
+        )
+    else:
+        header = (
+            f"✅ <b>Анализ завершён: {channel}</b>\n"
+            f"Проанализировано постов: <b>{total}</b> ({len(analyses)} пулов)\n\n"
+        )
+    await message.answer(header, parse_mode="HTML")
+    await _send(message, _format_style(final_profile), parse_mode="HTML", reply_markup=style_keyboard())
 
 
 @router.callback_query(F.data == "fetch:merge")
