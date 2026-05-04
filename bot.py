@@ -9,6 +9,7 @@ from aiogram.types import BotCommand
 from dotenv import load_dotenv
 
 from handlers import router
+from init_data import restore as restore_data
 
 load_dotenv(override=True)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -28,6 +29,8 @@ BOT_COMMANDS = [
 
 
 async def main():
+    restore_data()  # восстанавливаем данные при первом старте
+
     bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
     if not bot_token:
         raise ValueError("TELEGRAM_BOT_TOKEN не задан в .env")
