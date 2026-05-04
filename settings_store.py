@@ -4,7 +4,6 @@
 """
 import json
 import logging
-import os
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -53,7 +52,7 @@ def _defaults_from_style(channel: str = "") -> dict:
     except Exception:
         return HARDCODED_DEFAULTS.copy()
 
-    ch = (channel or os.getenv("CHANNEL_USERNAME", "")).strip()
+    ch = channel.strip() if channel else ""
     if not ch:
         return HARDCODED_DEFAULTS.copy()
 

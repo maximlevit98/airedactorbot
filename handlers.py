@@ -666,13 +666,12 @@ async def cmd_style(message: Message, state: FSMContext):
 async def cb_style(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
     user_id = callback.from_user.id
-    channel = os.getenv("CHANNEL_USERNAME", "").strip()
+    channel = get_channel(user_id)
     if not channel:
         await _safe_edit(
             callback.message,
             "⚠️ Канал не задан.\n\n"
-            "Добавь в <code>.env</code>:\n<code>CHANNEL_USERNAME=@username</code>\n\n"
-            "Или используй /style чтобы вручную вставить посты для анализа.",
+            "Перейди в ⚙️ <b>Настройки → 📡 Мой канал</b> и укажи свой канал.",
             parse_mode="HTML",
             reply_markup=main_menu(),
         )
@@ -858,12 +857,12 @@ async def _analyze_pool(message: Message, state: FSMContext, user_id: int, think
 async def cmd_fetch_channel(message: Message, state: FSMContext):
     user_id = message.from_user.id
     args = message.text.split(maxsplit=1)
-    channel = args[1].strip() if len(args) > 1 else os.getenv("CHANNEL_USERNAME", "")
+    channel = args[1].strip() if len(args) > 1 else get_channel(user_id)
 
     if not channel:
         await message.answer(
             "Укажи канал: <code>/fetch_channel @username</code>\n"
-            "Или добавь <code>CHANNEL_USERNAME=@username</code> в .env",
+            "Или задай его в ⚙️ Настройки → 📡 Мой канал",
             parse_mode="HTML",
         )
         return
@@ -979,7 +978,7 @@ async def cb_fetch_use_cache(callback: CallbackQuery, state: FSMContext):
 async def cb_fetch_refresh(callback: CallbackQuery, state: FSMContext):
     user_id = callback.from_user.id
     data = await state.get_data()
-    channel = data.get("fetch_channel", os.getenv("CHANNEL_USERNAME", ""))
+    channel = data.get("fetch_channel", get_channel(user_id))
     await callback.answer()
     await _safe_edit(callback.message, "Запускаю обновление…")
     await _do_fetch_and_analyze(callback.message, state, channel, user_id)
