@@ -10,7 +10,8 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-USERS_DIR = Path("users")
+from storage import BASE
+USERS_DIR = BASE / "users"
 
 # Кредитная система
 CREDITS_NEW_POST      = 5   # новый PostFlow

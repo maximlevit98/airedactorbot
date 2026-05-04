@@ -11,7 +11,8 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-DRAFTS_DIR = Path("drafts")
+from storage import BASE
+DRAFTS_DIR = BASE / "drafts"
 
 STAGE_LABELS = {
     "draft": "черновик готов",

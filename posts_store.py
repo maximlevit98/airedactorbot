@@ -11,7 +11,8 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-POSTS_DIR = Path("ready_posts")
+from storage import BASE
+POSTS_DIR = BASE / "ready_posts"
 
 
 def save_post(user_id: int, topic: str, text: str) -> str:

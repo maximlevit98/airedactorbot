@@ -11,7 +11,8 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-REPORTS_DIR = Path("reports")
+from storage import BASE
+REPORTS_DIR = BASE / "reports"
 CACHE_TTL_DAYS = 7       # кэш считается свежим 7 дней
 MAX_POSTS_FOR_ANALYSIS = 100  # бесплатный лимит анализа
 

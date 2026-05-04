@@ -8,7 +8,8 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-SETTINGS_DIR = Path("settings")
+from storage import BASE
+SETTINGS_DIR = BASE / "settings"
 
 # Базовые значения если ничего не нашли
 HARDCODED_DEFAULTS = {
